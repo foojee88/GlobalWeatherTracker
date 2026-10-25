@@ -30,6 +30,10 @@ public class MainForm : Form
     private readonly ListBox hubsListBox = new();
     private readonly WebBrowser mapBrowser = new();
 
+    // Forecast & Rain UI Components
+    private readonly ListView forecastListView = new();
+    private readonly ListView rainTrendListView = new();
+
     private static readonly (string City, string Country, double Lat, double Lon)[] GlobalHubs =
     [
         ("London", "United Kingdom", 51.5074, -0.1278),
@@ -48,9 +52,9 @@ public class MainForm : Form
 
     public MainForm()
     {
-        Text = "Global Weather Tracker & Interactive World Atlas";
-        Width = 1100;
-        Height = 740;
+        Text = "Global Weather Tracker, Atlas & Forecast Analytics";
+        Width = 1180;
+        Height = 820;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10);
 
@@ -69,17 +73,16 @@ public class MainForm : Form
         searchButton.Click += async (s, e) => await SearchCityWeatherAsync();
         AcceptButton = searchButton;
 
-        statusLabel = new() { Left = 550, Top = 22, Width = 500, ForeColor = Color.DarkSlateGray };
-
+        statusLabel = new() { Left = 550, Top = 22, Width = 550, ForeColor = Color.DarkSlateGray };
         topPanel.Controls.AddRange(new Control[] { searchLabel, cityInput, searchButton, statusLabel });
 
         // Left Panel (Telemetry & Quick Global Hubs)
         Panel leftPanel = new()
         {
             Dock = DockStyle.Left,
-            Width = 340,
+            Width = 330,
             BackColor = Color.FromArgb(249, 250, 251),
-            Padding = new Padding(15)
+            Padding = new Padding(12)
         };
 
         Label telemetryHeader = new()
@@ -87,15 +90,15 @@ public class MainForm : Form
             Text = "Live Weather & Local Time",
             Font = new Font("Segoe UI", 11, FontStyle.Bold),
             Dock = DockStyle.Top,
-            Height = 30
+            Height = 28
         };
 
         weatherInfoLabel = new()
         {
-            Text = "Search for a city or double-click a hub below to view live telemetry, local time, and map coordinates.",
+            Text = "Search for a city or double-click a hub below to view telemetry.",
             Dock = DockStyle.Top,
-            Height = 240,
-            Font = new Font("Segoe UI", 10),
+            Height = 210,
+            Font = new Font("Segoe UI", 9.5f),
             ForeColor = Color.FromArgb(33, 37, 41)
         };
 
@@ -123,7 +126,52 @@ public class MainForm : Form
         leftPanel.Controls.Add(weatherInfoLabel);
         leftPanel.Controls.Add(telemetryHeader);
 
-        // Center / Right Panel (Interactive World Map)
+        // Bottom Analytics Panel (Tabs for 7-Day & 24-Hr Rain Trend)
+        Panel bottomPanel = new()
+        {
+            Dock = DockStyle.Bottom,
+            Height = 230,
+            BackColor = Color.White
+        };
+
+        TabControl analyticsTabs = new()
+        {
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 9.5f)
+        };
+
+        // Tab 1: 7-Day Forecast Setup
+        TabPage forecastTab = new("📅 7-Day Extended Forecast");
+        forecastListView.Dock = DockStyle.Fill;
+        forecastListView.View = View.Details;
+        forecastListView.FullRowSelect = true;
+        forecastListView.GridLines = true;
+        forecastListView.Columns.Add("Date / Day", 130);
+        forecastListView.Columns.Add("Condition", 180);
+        forecastListView.Columns.Add("Min Temp", 90);
+        forecastListView.Columns.Add("Max Temp", 90);
+        forecastListView.Columns.Add("Precipitation", 110);
+        forecastListView.Columns.Add("Rain Chance", 110);
+        forecastTab.Controls.Add(forecastListView);
+
+        // Tab 2: 24-Hour Rain Trend Setup
+        TabPage rainTab = new("🌧️ 24-Hour Rain & Precipitation Trend");
+        rainTrendListView.Dock = DockStyle.Fill;
+        rainTrendListView.View = View.Details;
+        rainTrendListView.FullRowSelect = true;
+        rainTrendListView.GridLines = true;
+        rainTrendListView.Columns.Add("Time", 100);
+        rainTrendListView.Columns.Add("Temp", 80);
+        rainTrendListView.Columns.Add("Precipitation", 110);
+        rainTrendListView.Columns.Add("Probability", 100);
+        rainTrendListView.Columns.Add("24-Hour Probability Histogram", 350);
+        rainTab.Controls.Add(rainTrendListView);
+
+        analyticsTabs.TabPages.Add(forecastTab);
+        analyticsTabs.TabPages.Add(rainTab);
+        bottomPanel.Controls.Add(analyticsTabs);
+
+        // Center Panel (Interactive World Map)
         mapBrowser = new()
         {
             Dock = DockStyle.Fill,
@@ -131,10 +179,11 @@ public class MainForm : Form
         };
 
         Controls.Add(mapBrowser);
+        Controls.Add(bottomPanel);
         Controls.Add(leftPanel);
         Controls.Add(topPanel);
 
-        // Load initial default view (Hanoi)
+        // Default initial load: Hanoi
         Load += async (s, e) => await FetchAndDisplayLocationAsync("Hanoi", "Vietnam", 21.0285, 105.8542);
     }
 
@@ -189,12 +238,12 @@ public class MainForm : Form
 
     private async Task FetchAndDisplayLocationAsync(string name, string country, double lat, double lon)
     {
-        statusLabel.Text = $"Fetching live telemetry for {name}, {country}...";
+        statusLabel.Text = $"Fetching live telemetry, 7-day forecast & rain trend for {name}...";
 
         try
         {
-            // &timezone=auto tells the API to resolve the local time zone and timestamps automatically
-            string weatherUrl = $"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_direction_10m&timezone=auto";
+            // Query current weather, 7-day daily forecast, and 24-hr hourly rain parameters
+            string weatherUrl = $"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation,precipitation_probability&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=auto";
             var report = await httpClient.GetFromJsonAsync<WeatherResult>(weatherUrl);
 
             if (report != null)
@@ -209,10 +258,12 @@ public class MainForm : Form
                     $"Wind: {report.Current.WindSpeed:F1} km/h ({report.Current.WindDirection}°)\n" +
                     $"Humidity: {report.Current.RelativeHumidity} %\n" +
                     $"Coordinates: {lat:F4}, {lon:F4}\n" +
-                    $"Time Zone: {report.Timezone}";
+                    $"Timezone: {report.Timezone}";
 
                 statusLabel.Text = $"Ready • Updated {name} ({DateTime.Now:HH:mm:ss} Local Host)";
                 UpdateAtlasMap(name, lat, lon, report.Current.Temperature, formattedTime);
+                UpdateForecastTable(report.Daily);
+                UpdateRainTrendTable(report.Hourly, report.Current.Time);
             }
         }
         catch (Exception ex)
@@ -220,6 +271,86 @@ public class MainForm : Form
             statusLabel.Text = "Telemetry error.";
             MessageBox.Show($"Failed to fetch weather: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
+    }
+
+    private void UpdateForecastTable(DailyForecast? daily)
+    {
+        forecastListView.Items.Clear();
+        if (daily == null || daily.Time.Count == 0) return;
+
+        for (int i = 0; i < daily.Time.Count; i++)
+        {
+            string dateStr = daily.Time[i];
+            if (DateTime.TryParse(dateStr, out DateTime dt))
+            {
+                dateStr = dt.ToString("ddd, dd MMM");
+            }
+
+            string condition = InterpretWeatherCode(daily.WeatherCode.Count > i ? daily.WeatherCode[i] : 0);
+            string minTemp = daily.TemperatureMin.Count > i ? $"{daily.TemperatureMin[i]:F1} °C" : "--";
+            string maxTemp = daily.TemperatureMax.Count > i ? $"{daily.TemperatureMax[i]:F1} °C" : "--";
+            string precip = daily.PrecipitationSum.Count > i ? $"{daily.PrecipitationSum[i]:F1} mm" : "--";
+            string prob = (daily.PrecipitationProbabilityMax != null && daily.PrecipitationProbabilityMax.Count > i)
+                ? $"{daily.PrecipitationProbabilityMax[i]} %"
+                : "--";
+
+            ListViewItem item = new(dateStr);
+            item.SubItems.AddRange(new[] { condition, minTemp, maxTemp, precip, prob });
+            forecastListView.Items.Add(item);
+        }
+    }
+
+    private void UpdateRainTrendTable(HourlyForecast? hourly, string currentTimeStr)
+    {
+        rainTrendListView.Items.Clear();
+        if (hourly == null || hourly.Time.Count == 0) return;
+
+        // Find the index of the current hour to display the next 24 hours
+        int startIndex = 0;
+        if (DateTime.TryParse(currentTimeStr, out DateTime currentDt))
+        {
+            for (int i = 0; i < hourly.Time.Count; i++)
+            {
+                if (DateTime.TryParse(hourly.Time[i], out DateTime hDt) && hDt >= currentDt.AddMinutes(-30))
+                {
+                    startIndex = i;
+                    break;
+                }
+            }
+        }
+
+        int count = Math.Min(24, hourly.Time.Count - startIndex);
+        for (int i = startIndex; i < startIndex + count; i++)
+        {
+            string timeStr = hourly.Time[i];
+            if (DateTime.TryParse(timeStr, out DateTime dt))
+            {
+                timeStr = dt.ToString("HH:mm (ddd)");
+            }
+
+            string temp = hourly.Temperature.Count > i ? $"{hourly.Temperature[i]:F1} °C" : "--";
+            double precipVal = hourly.Precipitation.Count > i ? hourly.Precipitation[i] : 0.0;
+            string precip = $"{precipVal:F1} mm";
+
+            int probVal = (hourly.PrecipitationProbability != null && hourly.PrecipitationProbability.Count > i)
+                ? hourly.PrecipitationProbability[i]
+                : 0;
+
+            string prob = $"{probVal} %";
+            string visualBar = GenerateVisualBar(probVal);
+
+            ListViewItem item = new(timeStr);
+            item.SubItems.AddRange(new[] { temp, precip, prob, visualBar });
+            rainTrendListView.Items.Add(item);
+        }
+    }
+
+    private static string GenerateVisualBar(int percent)
+    {
+        int totalSegments = 14;
+        int filled = (int)Math.Round((percent / 100.0) * totalSegments);
+        filled = Math.Clamp(filled, 0, totalSegments);
+        return $"{new string('█', filled)}{new string('░', totalSegments - filled)}  {percent,3}%";
     }
 
     private static string FormatLocalTime(string rawTime, string? tzAbbrev)
@@ -290,6 +421,12 @@ public class WeatherResult
 
     [JsonPropertyName("current")]
     public CurrentWeather Current { get; set; } = new();
+
+    [JsonPropertyName("daily")]
+    public DailyForecast? Daily { get; set; }
+
+    [JsonPropertyName("hourly")]
+    public HourlyForecast? Hourly { get; set; }
 }
 
 public class CurrentWeather
@@ -311,6 +448,42 @@ public class CurrentWeather
 
     [JsonPropertyName("wind_direction_10m")]
     public int WindDirection { get; set; }
+}
+
+public class DailyForecast
+{
+    [JsonPropertyName("time")]
+    public List<string> Time { get; set; } = [];
+
+    [JsonPropertyName("weather_code")]
+    public List<int> WeatherCode { get; set; } = [];
+
+    [JsonPropertyName("temperature_2m_max")]
+    public List<double> TemperatureMax { get; set; } = [];
+
+    [JsonPropertyName("temperature_2m_min")]
+    public List<double> TemperatureMin { get; set; } = [];
+
+    [JsonPropertyName("precipitation_sum")]
+    public List<double> PrecipitationSum { get; set; } = [];
+
+    [JsonPropertyName("precipitation_probability_max")]
+    public List<int>? PrecipitationProbabilityMax { get; set; }
+}
+
+public class HourlyForecast
+{
+    [JsonPropertyName("time")]
+    public List<string> Time { get; set; } = [];
+
+    [JsonPropertyName("temperature_2m")]
+    public List<double> Temperature { get; set; } = [];
+
+    [JsonPropertyName("precipitation")]
+    public List<double> Precipitation { get; set; } = [];
+
+    [JsonPropertyName("precipitation_probability")]
+    public List<int>? PrecipitationProbability { get; set; }
 }
 
 public class GeocodingResponse
