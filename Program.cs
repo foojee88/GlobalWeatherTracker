@@ -31,12 +31,16 @@ public class MainForm : Form
     private readonly Label weatherInfoLabel = new();
     private readonly ListBox hubsListBox = new();
     
-    // Modern Edge/Chromium WebView2 control
     private readonly WebView2 mapWebView = new();
 
-    // Forecast & Rain UI Components
     private readonly ListView forecastListView = new();
     private readonly ListView rainTrendListView = new();
+
+    // Track active coordinates for Refresh and Copy tools
+    private double currentActiveLat = 21.0285;
+    private double currentActiveLon = 105.8542;
+    private string currentActiveName = "Hanoi";
+    private string currentActiveCountry = "Vietnam";
 
     private static readonly (string City, string Country, double Lat, double Lon)[] GlobalHubs =
     [
@@ -58,11 +62,11 @@ public class MainForm : Form
     {
         Text = "Global Weather Tracker & Chromium Atlas Dashboard";
         Width = 1200;
-        Height = 840;
+        Height = 860;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10);
 
-        // Top Search Bar
+        // --- 1. Top Search Bar ---
         Panel topPanel = new()
         {
             Dock = DockStyle.Top,
@@ -80,7 +84,7 @@ public class MainForm : Form
         statusLabel = new() { Left = 550, Top = 22, Width = 600, ForeColor = Color.DarkSlateGray };
         topPanel.Controls.AddRange(new Control[] { searchLabel, cityInput, searchButton, statusLabel });
 
-        // Left Telemetry & Hubs Panel
+        // --- 2. Left Telemetry & Hubs Panel ---
         Panel leftPanel = new()
         {
             Dock = DockStyle.Left,
@@ -130,7 +134,7 @@ public class MainForm : Form
         leftPanel.Controls.Add(weatherInfoLabel);
         leftPanel.Controls.Add(telemetryHeader);
 
-        // Bottom Analytics Panel (Tabs for 7-Day & 24-Hr Rain Trend)
+        // --- 3. Bottom Analytics Panel ---
         Panel bottomPanel = new()
         {
             Dock = DockStyle.Bottom,
@@ -144,7 +148,6 @@ public class MainForm : Form
             Font = new Font("Segoe UI", 9.5f)
         };
 
-        // Tab 1: 7-Day Forecast Setup
         TabPage forecastTab = new("📅 7-Day Extended Forecast");
         forecastListView.Dock = DockStyle.Fill;
         forecastListView.View = View.Details;
@@ -158,7 +161,6 @@ public class MainForm : Form
         forecastListView.Columns.Add("Rain Chance", 110);
         forecastTab.Controls.Add(forecastListView);
 
-        // Tab 2: 24-Hour Rain Trend Setup
         TabPage rainTab = new("🌧️ 24-Hour Rain & Precipitation Trend");
         rainTrendListView.Dock = DockStyle.Fill;
         rainTrendListView.View = View.Details;
@@ -175,13 +177,17 @@ public class MainForm : Form
         analyticsTabs.TabPages.Add(rainTab);
         bottomPanel.Controls.Add(analyticsTabs);
 
-        // Center Panel: Modern Edge Chromium WebView2
+        // --- 4. Center Map Panel ---
         mapWebView.Dock = DockStyle.Fill;
 
+        // Assembly of Main Controls (Order matters for Docking)
         Controls.Add(mapWebView);
         Controls.Add(bottomPanel);
         Controls.Add(leftPanel);
         Controls.Add(topPanel);
+
+        // Initialize Menu Bar at the very top
+        InitializeMenuBar();
 
         // Initialize WebView2 and load default hub
         Load += async (s, e) =>
@@ -190,7 +196,6 @@ public class MainForm : Form
             {
                 await mapWebView.EnsureCoreWebView2Async();
                 
-                // Listen for messages posted from Leaflet JavaScript
                 mapWebView.CoreWebView2.WebMessageReceived += async (sender, args) =>
                 {
                     try
@@ -217,6 +222,67 @@ public class MainForm : Form
         };
     }
 
+    // ==========================================
+    // MENU BAR INITIALIZATION
+    // ==========================================
+    private void InitializeMenuBar()
+    {
+        MenuStrip menuStrip = new() { BackColor = Color.FromArgb(240, 243, 246) };
+
+        // File Menu
+        ToolStripMenuItem fileMenu = new("&File");
+        ToolStripMenuItem refreshItem = new("&Refresh Telemetry", null, async (s, e) =>
+        {
+            await FetchAndDisplayLocationAsync(currentActiveName, currentActiveCountry, currentActiveLat, currentActiveLon);
+        })
+        {
+            ShortcutKeys = Keys.F5
+        };
+
+        ToolStripMenuItem exitItem = new("E&xit", null, (s, e) => Application.Exit())
+        {
+            ShortcutKeys = Keys.Alt | Keys.F4
+        };
+        fileMenu.DropDownItems.AddRange(new ToolStripItem[] { refreshItem, new ToolStripSeparator(), exitItem });
+
+        // Tools Menu
+        ToolStripMenuItem toolsMenu = new("&Tools");
+        ToolStripMenuItem copyCoordsItem = new("Copy Current &Coordinates", null, (s, e) =>
+        {
+            Clipboard.SetText($"{currentActiveLat:F4}, {currentActiveLon:F4}");
+            MessageBox.Show($"Copied ({currentActiveLat:F4}, {currentActiveLon:F4}) to clipboard!", "Clipboard", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        });
+        toolsMenu.DropDownItems.Add(copyCoordsItem);
+
+        // Help Menu
+        ToolStripMenuItem helpMenu = new("&Help");
+        ToolStripMenuItem versionItem = new("&About & Version", null, (s, e) => ShowAboutDialog());
+        helpMenu.DropDownItems.Add(versionItem);
+
+        menuStrip.Items.AddRange(new ToolStripItem[] { fileMenu, toolsMenu, helpMenu });
+        MainMenuStrip = menuStrip;
+        Controls.Add(menuStrip);
+    }
+
+    private static void ShowAboutDialog()
+    {
+        var asm = System.Reflection.Assembly.GetExecutingAssembly().GetName();
+        string version = asm.Version?.ToString(3) ?? "1.0.0";
+        string runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+        string osArch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture.ToString();
+
+        string message = 
+            $"Global Weather Tracker\n" +
+            $"Version: {version}\n" +
+            $"Runtime: {runtime} ({osArch})\n" +
+            $"Map Engine: Microsoft Edge WebView2 (Chromium)\n\n" +
+            $"Data Providers:\n" +
+            $"• Open-Meteo Weather API\n" +
+            $"• Esri ArcGIS & OpenStreetMap Contributors";
+
+        MessageBox.Show(message, "About Global Weather Tracker", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
     private async Task OnMapClickedAsync(double lat, double lon)
     {
         statusLabel.Text = $"Pin dropped at ({lat:F4}, {lon:F4}). Inspecting telemetry...";
@@ -236,7 +302,6 @@ public class MainForm : Form
             return;
         }
 
-        // Check if user entered raw coordinates (e.g. "21.02, 105.85")
         var parts = input.Split(',');
         if (parts.Length == 2 && double.TryParse(parts[0], out double lat) && double.TryParse(parts[1], out double lon))
         {
@@ -286,6 +351,11 @@ public class MainForm : Form
 
     private async Task FetchAndDisplayLocationAsync(string name, string country, double lat, double lon)
     {
+        currentActiveLat = lat;
+        currentActiveLon = lon;
+        currentActiveName = name;
+        currentActiveCountry = country;
+
         statusLabel.Text = $"Fetching live telemetry for {name}...";
 
         try
@@ -429,7 +499,6 @@ public class MainForm : Form
             <script>
                 var map = L.map('map').setView([{lat}, {lon}], 7);
                 
-                // Esri World Topographic Basemap (No API key required)
                 L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
                     attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, USGS',
                     maxZoom: 18
@@ -438,12 +507,10 @@ public class MainForm : Form
                 var marker = L.marker([{lat}, {lon}]).addTo(map);
                 marker.bindPopup('<b>{title}</b><br>🌡️ {temp:F1}°C<br>🕒 {localTime}').openPopup();
 
-                // Click-to-inspect handler
                 map.on('click', function(e) {{
                     var clickedLat = e.latlng.lat;
                     var clickedLng = e.latlng.lng;
 
-                    // Send coordinates across WebView2 bridge back to C#
                     if (window.chrome && window.chrome.webview) {{
                         window.chrome.webview.postMessage({{
                             lat: clickedLat,
