@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using Microsoft.Web.WebView2.WinForms;
 
 namespace GlobalWeatherTracker;
 
@@ -28,7 +30,9 @@ public class MainForm : Form
     private readonly Label statusLabel = new();
     private readonly Label weatherInfoLabel = new();
     private readonly ListBox hubsListBox = new();
-    private readonly WebBrowser mapBrowser = new();
+    
+    // Modern Edge/Chromium WebView2 control
+    private readonly WebView2 mapWebView = new();
 
     // Forecast & Rain UI Components
     private readonly ListView forecastListView = new();
@@ -52,9 +56,9 @@ public class MainForm : Form
 
     public MainForm()
     {
-        Text = "Global Weather Tracker, Atlas & Forecast Analytics";
-        Width = 1180;
-        Height = 820;
+        Text = "Global Weather Tracker & Chromium Atlas Dashboard";
+        Width = 1200;
+        Height = 840;
         StartPosition = FormStartPosition.CenterScreen;
         Font = new Font("Segoe UI", 10);
 
@@ -73,10 +77,10 @@ public class MainForm : Form
         searchButton.Click += async (s, e) => await SearchCityWeatherAsync();
         AcceptButton = searchButton;
 
-        statusLabel = new() { Left = 550, Top = 22, Width = 550, ForeColor = Color.DarkSlateGray };
+        statusLabel = new() { Left = 550, Top = 22, Width = 600, ForeColor = Color.DarkSlateGray };
         topPanel.Controls.AddRange(new Control[] { searchLabel, cityInput, searchButton, statusLabel });
 
-        // Left Panel (Telemetry & Quick Global Hubs)
+        // Left Telemetry & Hubs Panel
         Panel leftPanel = new()
         {
             Dock = DockStyle.Left,
@@ -95,7 +99,7 @@ public class MainForm : Form
 
         weatherInfoLabel = new()
         {
-            Text = "Search for a city or double-click a hub below to view telemetry.",
+            Text = "Search for a city, double-click a hub, or click anywhere directly on the map to inspect weather telemetry.",
             Dock = DockStyle.Top,
             Height = 210,
             Font = new Font("Segoe UI", 9.5f),
@@ -130,7 +134,7 @@ public class MainForm : Form
         Panel bottomPanel = new()
         {
             Dock = DockStyle.Bottom,
-            Height = 230,
+            Height = 240,
             BackColor = Color.White
         };
 
@@ -171,43 +175,87 @@ public class MainForm : Form
         analyticsTabs.TabPages.Add(rainTab);
         bottomPanel.Controls.Add(analyticsTabs);
 
-        // Center Panel (Interactive World Map)
-        mapBrowser = new()
-        {
-            Dock = DockStyle.Fill,
-            ScriptErrorsSuppressed = true
-        };
+        // Center Panel: Modern Edge Chromium WebView2
+        mapWebView.Dock = DockStyle.Fill;
 
-        Controls.Add(mapBrowser);
+        Controls.Add(mapWebView);
         Controls.Add(bottomPanel);
         Controls.Add(leftPanel);
         Controls.Add(topPanel);
 
-        // Default initial load: Hanoi
-        Load += async (s, e) => await FetchAndDisplayLocationAsync("Hanoi", "Vietnam", 21.0285, 105.8542);
+        // Initialize WebView2 and load default hub
+        Load += async (s, e) =>
+        {
+            try
+            {
+                await mapWebView.EnsureCoreWebView2Async();
+                
+                // Listen for messages posted from Leaflet JavaScript
+                mapWebView.CoreWebView2.WebMessageReceived += async (sender, args) =>
+                {
+                    try
+                    {
+                        string jsonString = args.WebMessageAsJson;
+                        var clickData = JsonSerializer.Deserialize<MapClickPayload>(jsonString);
+                        if (clickData != null)
+                        {
+                            await OnMapClickedAsync(clickData.Lat, clickData.Lon);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        statusLabel.Text = $"Map click error: {ex.Message}";
+                    }
+                };
+
+                await FetchAndDisplayLocationAsync("Hanoi", "Vietnam", 21.0285, 105.8542);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Could not initialize WebView2: {ex.Message}", "WebView2 Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        };
+    }
+
+    private async Task OnMapClickedAsync(double lat, double lon)
+    {
+        statusLabel.Text = $"Pin dropped at ({lat:F4}, {lon:F4}). Inspecting telemetry...";
+        string locationName = $"Coordinates ({lat:F3}, {lon:F3})";
+        string country = "Earth";
+
+        cityInput.Text = $"{lat:F4}, {lon:F4}";
+        await FetchAndDisplayLocationAsync(locationName, country, lat, lon);
     }
 
     private async Task SearchCityWeatherAsync()
     {
-        string city = cityInput.Text.Trim();
-        if (string.IsNullOrWhiteSpace(city))
+        string input = cityInput.Text.Trim();
+        if (string.IsNullOrWhiteSpace(input))
         {
             MessageBox.Show("Please enter a city name to search.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        statusLabel.Text = $"Geocoding '{city}'...";
+        // Check if user entered raw coordinates (e.g. "21.02, 105.85")
+        var parts = input.Split(',');
+        if (parts.Length == 2 && double.TryParse(parts[0], out double lat) && double.TryParse(parts[1], out double lon))
+        {
+            await FetchAndDisplayLocationAsync($"Coordinates ({lat:F3}, {lon:F3})", "Earth", lat, lon);
+            return;
+        }
+
+        statusLabel.Text = $"Geocoding '{input}'...";
         searchButton.Enabled = false;
 
         try
         {
-            string geoUrl = $"https://geocoding-api.open-meteo.com/v1/search?name={Uri.EscapeDataString(city)}&count=1&language=en&format=json";
+            string geoUrl = $"https://geocoding-api.open-meteo.com/v1/search?name={Uri.EscapeDataString(input)}&count=1&language=en&format=json";
             var geoResult = await httpClient.GetFromJsonAsync<GeocodingResponse>(geoUrl);
 
             if (geoResult?.Results == null || geoResult.Results.Count == 0)
             {
-                statusLabel.Text = $"Could not locate '{city}'.";
-                MessageBox.Show($"Could not find location coordinates for '{city}'.", "Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                statusLabel.Text = $"Could not locate '{input}'.";
+                MessageBox.Show($"Could not find location coordinates for '{input}'.", "Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
 
@@ -238,11 +286,10 @@ public class MainForm : Form
 
     private async Task FetchAndDisplayLocationAsync(string name, string country, double lat, double lon)
     {
-        statusLabel.Text = $"Fetching live telemetry, 7-day forecast & rain trend for {name}...";
+        statusLabel.Text = $"Fetching live telemetry for {name}...";
 
         try
         {
-            // Query current weather, 7-day daily forecast, and 24-hr hourly rain parameters
             string weatherUrl = $"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_direction_10m&hourly=temperature_2m,precipitation,precipitation_probability&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max&timezone=auto";
             var report = await httpClient.GetFromJsonAsync<WeatherResult>(weatherUrl);
 
@@ -305,7 +352,6 @@ public class MainForm : Form
         rainTrendListView.Items.Clear();
         if (hourly == null || hourly.Time.Count == 0) return;
 
-        // Find the index of the current hour to display the next 24 hours
         int startIndex = 0;
         if (DateTime.TryParse(currentTimeStr, out DateTime currentDt))
         {
@@ -364,32 +410,52 @@ public class MainForm : Form
 
     private void UpdateAtlasMap(string title, double lat, double lon, double temp, string localTime)
     {
+        if (mapWebView.CoreWebView2 == null) return;
+
         string html = $@"
         <!DOCTYPE html>
         <html>
         <head>
-            <meta http-equiv='X-UA-Compatible' content='IE=edge' />
+            <meta charset='utf-8' />
+            <meta name='viewport' content='width=device-width, initial-scale=1.0'>
             <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css' />
             <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
             <style>
-                html, body, #map {{ height: 100%; margin: 0; padding: 0; }}
+                html, body, #map {{ height: 100%; margin: 0; padding: 0; background: #e5e3df; cursor: crosshair; }}
             </style>
         </head>
         <body>
             <div id='map'></div>
             <script>
                 var map = L.map('map').setView([{lat}, {lon}], 7);
-                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
-                    attribution: '&copy; OpenStreetMap contributors'
+                
+                // Esri World Topographic Basemap (No API key required)
+                L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{{z}}/{{y}}/{{x}}', {{
+                    attribution: 'Tiles &copy; Esri &mdash; Esri, DeLorme, NAVTEQ, TomTom, Intermap, USGS',
+                    maxZoom: 18
                 }}).addTo(map);
 
                 var marker = L.marker([{lat}, {lon}]).addTo(map);
                 marker.bindPopup('<b>{title}</b><br>🌡️ {temp:F1}°C<br>🕒 {localTime}').openPopup();
+
+                // Click-to-inspect handler
+                map.on('click', function(e) {{
+                    var clickedLat = e.latlng.lat;
+                    var clickedLng = e.latlng.lng;
+
+                    // Send coordinates across WebView2 bridge back to C#
+                    if (window.chrome && window.chrome.webview) {{
+                        window.chrome.webview.postMessage({{
+                            lat: clickedLat,
+                            lon: clickedLng
+                        }});
+                    }}
+                }});
             </script>
         </body>
         </html>";
 
-        mapBrowser.DocumentText = html;
+        mapWebView.NavigateToString(html);
     }
 
     private static string InterpretWeatherCode(int code) => code switch
@@ -409,6 +475,15 @@ public class MainForm : Form
         96 or 99 => "Thunderstorm with Hail ⛈️⚡",
         _ => $"Code {code}"
     };
+}
+
+public class MapClickPayload
+{
+    [JsonPropertyName("lat")]
+    public double Lat { get; set; }
+
+    [JsonPropertyName("lon")]
+    public double Lon { get; set; }
 }
 
 public class WeatherResult
