@@ -1,22 +1,40 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 
 namespace GlobalWeatherTracker;
 
 public class Program
 {
-    private static readonly HttpClient httpClient = new()
+    [STAThread]
+    public static void Main()
     {
-        Timeout = TimeSpan.FromSeconds(10)
-    };
+        ApplicationConfiguration.Initialize();
+        Application.Run(new MainForm());
+    }
+}
+
+public class MainForm : Form
+{
+    private static readonly HttpClient httpClient = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    private readonly TextBox cityInput = new();
+    private readonly Button searchButton = new();
+    private readonly Label statusLabel = new();
+    private readonly Label weatherInfoLabel = new();
+    private readonly ListBox hubsListBox = new();
+    private readonly WebBrowser mapBrowser = new();
 
     private static readonly (string City, string Country, double Lat, double Lon)[] GlobalHubs =
     [
         ("London", "United Kingdom", 51.5074, -0.1278),
+        ("Hanoi", "Vietnam", 21.0285, 105.8542),
+        ("Ho Chi Minh City", "Vietnam", 10.8231, 106.6297),
         ("Tokyo", "Japan", 35.6762, 139.6503),
         ("New York", "United States", 40.7128, -74.0060),
         ("Sydney", "Australia", -33.8688, 151.2093),
@@ -28,189 +46,220 @@ public class Program
         ("McMurdo Station", "Antarctica", -77.8460, 166.6681)
     ];
 
-    public static async Task Main(string[] args)
+    public MainForm()
     {
-        Console.OutputEncoding = System.Text.Encoding.UTF8;
+        Text = "Global Weather Tracker & Interactive World Atlas";
+        Width = 1100;
+        Height = 740;
+        StartPosition = FormStartPosition.CenterScreen;
+        Font = new Font("Segoe UI", 10);
 
-        while (true)
+        // Top Search Bar
+        Panel topPanel = new()
         {
-            Console.Clear();
-            Console.ForegroundColor = ConsoleColor.Cyan;
-            Console.WriteLine("==========================================================");
-            Console.WriteLine("               GLOBAL WEATHER TRACKER                     ");
-            Console.WriteLine("==========================================================");
-            Console.ResetColor();
-            Console.WriteLine("1. Global Weather Snapshot (Across all continents)");
-            Console.WriteLine("2. Look Up Any City Worldwide");
-            Console.WriteLine("3. Look Up by Exact Coordinates (Latitude, Longitude)");
-            Console.WriteLine("4. Exit");
-            Console.WriteLine();
-            Console.Write("Select an option (1-4): ");
+            Dock = DockStyle.Top,
+            Height = 65,
+            BackColor = Color.FromArgb(240, 243, 246),
+            Padding = new Padding(15, 15, 15, 10)
+        };
 
-            string? choice = Console.ReadLine()?.Trim();
+        Label searchLabel = new() { Text = "Search City:", Left = 15, Top = 20, Width = 85, Font = new Font("Segoe UI", 10, FontStyle.Bold) };
+        cityInput = new() { Left = 105, Top = 18, Width = 260, PlaceholderText = "e.g. Hanoi, London, Tokyo..." };
+        searchButton = new() { Text = "Get Weather & Map", Left = 375, Top = 16, Width = 160, Height = 30 };
+        searchButton.Click += async (s, e) => await SearchCityWeatherAsync();
+        AcceptButton = searchButton;
 
-            switch (choice)
-            {
-                case "1":
-                    await ScanGlobalHubsAsync();
-                    break;
-                case "2":
-                    await SearchByCityAsync();
-                    break;
-                case "3":
-                    await SearchByCoordinatesAsync();
-                    break;
-                case "4":
-                    Console.WriteLine("\nExiting. Stay safe in any weather!");
-                    return;
-                default:
-                    Console.WriteLine("\nInvalid option. Press any key to continue...");
-                    Console.ReadKey();
-                    continue;
-            }
+        statusLabel = new() { Left = 550, Top = 22, Width = 500, ForeColor = Color.DarkSlateGray };
 
-            Console.WriteLine("\nPress any key to return to the main menu...");
-            Console.ReadKey();
-        }
-    }
+        topPanel.Controls.AddRange(new Control[] { searchLabel, cityInput, searchButton, statusLabel });
 
-    private static async Task ScanGlobalHubsAsync()
-    {
-        Console.WriteLine("\nFetching live atmospheric reports across the globe...\n");
-        Console.WriteLine("{0,-20} {1,-18} {2,8} {3,12} {4,-20}", "City", "Country", "Temp", "Wind", "Condition");
-        Console.WriteLine(new string('-', 82));
+        // Left Panel (Telemetry & Quick Global Hubs)
+        Panel leftPanel = new()
+        {
+            Dock = DockStyle.Left,
+            Width = 340,
+            BackColor = Color.FromArgb(249, 250, 251),
+            Padding = new Padding(15)
+        };
 
-        var tasks = new List<Task<(string City, string Country, WeatherResult? Data)>>();
+        Label telemetryHeader = new()
+        {
+            Text = "Live Weather & Local Time",
+            Font = new Font("Segoe UI", 11, FontStyle.Bold),
+            Dock = DockStyle.Top,
+            Height = 30
+        };
 
+        weatherInfoLabel = new()
+        {
+            Text = "Search for a city or double-click a hub below to view live telemetry, local time, and map coordinates.",
+            Dock = DockStyle.Top,
+            Height = 240,
+            Font = new Font("Segoe UI", 10),
+            ForeColor = Color.FromArgb(33, 37, 41)
+        };
+
+        Label hubsHeader = new()
+        {
+            Text = "Quick Global Hubs (Double-click):",
+            Font = new Font("Segoe UI", 9, FontStyle.Bold),
+            Dock = DockStyle.Top,
+            Height = 25
+        };
+
+        hubsListBox = new()
+        {
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 9)
+        };
         foreach (var hub in GlobalHubs)
         {
-            tasks.Add(Task.Run(async () =>
-            {
-                var weather = await FetchWeatherAsync(hub.Lat, hub.Lon);
-                return (hub.City, hub.Country, weather);
-            }));
+            hubsListBox.Items.Add($"{hub.City}, {hub.Country}");
         }
+        hubsListBox.DoubleClick += async (s, e) => await SelectHubAsync();
 
-        var results = await Task.WhenAll(tasks);
+        leftPanel.Controls.Add(hubsListBox);
+        leftPanel.Controls.Add(hubsHeader);
+        leftPanel.Controls.Add(weatherInfoLabel);
+        leftPanel.Controls.Add(telemetryHeader);
 
-        foreach (var report in results)
+        // Center / Right Panel (Interactive World Map)
+        mapBrowser = new()
         {
-            if (report.Data != null)
-            {
-                string condition = InterpretWeatherCode(report.Data.Current.WeatherCode);
-                Console.WriteLine(
-                    "{0,-20} {1,-18} {2,6:F1}°C {3,8:F1} km/h  {4,-20}",
-                    report.City,
-                    report.Country,
-                    report.Data.Current.Temperature,
-                    report.Data.Current.WindSpeed,
-                    condition
-                );
-            }
-            else
-            {
-                Console.WriteLine("{0,-20} {1,-18} [Error reading telemetry]", report.City, report.Country);
-            }
-        }
+            Dock = DockStyle.Fill,
+            ScriptErrorsSuppressed = true
+        };
+
+        Controls.Add(mapBrowser);
+        Controls.Add(leftPanel);
+        Controls.Add(topPanel);
+
+        // Load initial default view (Hanoi)
+        Load += async (s, e) => await FetchAndDisplayLocationAsync("Hanoi", "Vietnam", 21.0285, 105.8542);
     }
 
-    private static async Task SearchByCityAsync()
+    private async Task SearchCityWeatherAsync()
     {
-        Console.Write("\nEnter city name: ");
-        string? query = Console.ReadLine()?.Trim();
-
-        if (string.IsNullOrWhiteSpace(query))
+        string city = cityInput.Text.Trim();
+        if (string.IsNullOrWhiteSpace(city))
         {
-            Console.WriteLine("City name cannot be empty.");
+            MessageBox.Show("Please enter a city name to search.", "Notice", MessageBoxButtons.OK, MessageBoxIcon.Information);
             return;
         }
 
-        Console.WriteLine($"Geocoding '{query}'...");
-        var geoResult = await GeocodeCityAsync(query);
-
-        if (geoResult?.Results == null || geoResult.Results.Count == 0)
-        {
-            Console.WriteLine($"Location '{query}' could not be resolved on Earth.");
-            return;
-        }
-
-        var location = geoResult.Results[0];
-        Console.WriteLine($"Found: {location.Name}, {location.Country} (Lat: {location.Latitude:F4}, Lon: {location.Longitude:F4})");
-        Console.WriteLine("Retrieving live telemetry...");
-
-        var weather = await FetchWeatherAsync(location.Latitude, location.Longitude);
-        DisplaySingleReport($"{location.Name}, {location.Country}", weather);
-    }
-
-    private static async Task SearchByCoordinatesAsync()
-    {
-        Console.Write("\nEnter Latitude (-90 to 90): ");
-        if (!double.TryParse(Console.ReadLine(), out double lat) || lat < -90 || lat > 90)
-        {
-            Console.WriteLine("Invalid latitude value.");
-            return;
-        }
-
-        Console.Write("Enter Longitude (-180 to 180): ");
-        if (!double.TryParse(Console.ReadLine(), out double lon) || lon < -180 || lon > 180)
-        {
-            Console.WriteLine("Invalid longitude value.");
-            return;
-        }
-
-        Console.WriteLine($"Retrieving weather for ({lat:F4}, {lon:F4})...");
-        var weather = await FetchWeatherAsync(lat, lon);
-        DisplaySingleReport($"Coordinates ({lat:F4}, {lon:F4})", weather);
-    }
-
-    private static void DisplaySingleReport(string title, WeatherResult? report)
-    {
-        if (report == null)
-        {
-            Console.WriteLine("Failed to fetch weather data for the specified location.");
-            return;
-        }
-
-        Console.ForegroundColor = ConsoleColor.Green;
-        Console.WriteLine($"\n--- LIVE WEATHER REPORT: {title.ToUpper()} ---");
-        Console.ResetColor();
-        Console.WriteLine($"Condition:         {InterpretWeatherCode(report.Current.WeatherCode)}");
-        Console.WriteLine($"Temperature:       {report.Current.Temperature:F1} °C ({CelsiusToFahrenheit(report.Current.Temperature):F1} °F)");
-        Console.WriteLine($"Relative Humidity: {report.Current.RelativeHumidity} %");
-        Console.WriteLine($"Wind Velocity:     {report.Current.WindSpeed:F1} km/h (Direction: {report.Current.WindDirection}°)");
-        Console.WriteLine($"Atmospheric Day:   {(report.Current.IsDay == 1 ? "Daylight" : "Night")}");
-        Console.WriteLine($"Telemetry Time:    {report.Current.Time} (UTC)");
-    }
-
-    private static async Task<WeatherResult?> FetchWeatherAsync(double latitude, double longitude)
-    {
-        string url = $"https://api.open-meteo.com/v1/forecast?latitude={latitude}&longitude={longitude}&current=temperature_2m,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_direction_10m";
+        statusLabel.Text = $"Geocoding '{city}'...";
+        searchButton.Enabled = false;
 
         try
         {
-            return await httpClient.GetFromJsonAsync<WeatherResult>(url);
+            string geoUrl = $"https://geocoding-api.open-meteo.com/v1/search?name={Uri.EscapeDataString(city)}&count=1&language=en&format=json";
+            var geoResult = await httpClient.GetFromJsonAsync<GeocodingResponse>(geoUrl);
+
+            if (geoResult?.Results == null || geoResult.Results.Count == 0)
+            {
+                statusLabel.Text = $"Could not locate '{city}'.";
+                MessageBox.Show($"Could not find location coordinates for '{city}'.", "Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var loc = geoResult.Results[0];
+            await FetchAndDisplayLocationAsync(loc.Name, loc.Country, loc.Latitude, loc.Longitude);
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            statusLabel.Text = "Network error.";
+            MessageBox.Show($"Error retrieving location data: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            searchButton.Enabled = true;
         }
     }
 
-    private static async Task<GeocodingResponse?> GeocodeCityAsync(string cityName)
+    private async Task SelectHubAsync()
     {
-        string url = $"https://geocoding-api.open-meteo.com/v1/search?name={Uri.EscapeDataString(cityName)}&count=1&language=en&format=json";
+        int index = hubsListBox.SelectedIndex;
+        if (index >= 0 && index < GlobalHubs.Length)
+        {
+            var hub = GlobalHubs[index];
+            cityInput.Text = hub.City;
+            await FetchAndDisplayLocationAsync(hub.City, hub.Country, hub.Lat, hub.Lon);
+        }
+    }
+
+    private async Task FetchAndDisplayLocationAsync(string name, string country, double lat, double lon)
+    {
+        statusLabel.Text = $"Fetching live telemetry for {name}, {country}...";
 
         try
         {
-            return await httpClient.GetFromJsonAsync<GeocodingResponse>(url);
+            // &timezone=auto tells the API to resolve the local time zone and timestamps automatically
+            string weatherUrl = $"https://api.open-meteo.com/v1/forecast?latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,is_day,weather_code,wind_speed_10m,wind_direction_10m&timezone=auto";
+            var report = await httpClient.GetFromJsonAsync<WeatherResult>(weatherUrl);
+
+            if (report != null)
+            {
+                string formattedTime = FormatLocalTime(report.Current.Time, report.TimezoneAbbreviation);
+
+                weatherInfoLabel.Text =
+                    $"Location: {name}, {country}\n\n" +
+                    $"Local Time: {formattedTime}\n" +
+                    $"Condition: {InterpretWeatherCode(report.Current.WeatherCode)}\n" +
+                    $"Temperature: {report.Current.Temperature:F1} °C / {(report.Current.Temperature * 9 / 5 + 32):F1} °F\n" +
+                    $"Wind: {report.Current.WindSpeed:F1} km/h ({report.Current.WindDirection}°)\n" +
+                    $"Humidity: {report.Current.RelativeHumidity} %\n" +
+                    $"Coordinates: {lat:F4}, {lon:F4}\n" +
+                    $"Time Zone: {report.Timezone}";
+
+                statusLabel.Text = $"Ready • Updated {name} ({DateTime.Now:HH:mm:ss} Local Host)";
+                UpdateAtlasMap(name, lat, lon, report.Current.Temperature, formattedTime);
+            }
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            statusLabel.Text = "Telemetry error.";
+            MessageBox.Show($"Failed to fetch weather: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
     }
 
-    private static double CelsiusToFahrenheit(double c) => (c * 9 / 5) + 32;
+    private static string FormatLocalTime(string rawTime, string? tzAbbrev)
+    {
+        if (DateTime.TryParse(rawTime, out DateTime parsed))
+        {
+            return $"{parsed:dd MMM yyyy, HH:mm} ({tzAbbrev ?? "Local"})";
+        }
+        return rawTime;
+    }
+
+    private void UpdateAtlasMap(string title, double lat, double lon, double temp, string localTime)
+    {
+        string html = $@"
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta http-equiv='X-UA-Compatible' content='IE=edge' />
+            <link rel='stylesheet' href='https://unpkg.com/leaflet@1.9.4/dist/leaflet.css' />
+            <script src='https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'></script>
+            <style>
+                html, body, #map {{ height: 100%; margin: 0; padding: 0; }}
+            </style>
+        </head>
+        <body>
+            <div id='map'></div>
+            <script>
+                var map = L.map('map').setView([{lat}, {lon}], 7);
+                L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                    attribution: '&copy; OpenStreetMap contributors'
+                }}).addTo(map);
+
+                var marker = L.marker([{lat}, {lon}]).addTo(map);
+                marker.bindPopup('<b>{title}</b><br>🌡️ {temp:F1}°C<br>🕒 {localTime}').openPopup();
+            </script>
+        </body>
+        </html>";
+
+        mapBrowser.DocumentText = html;
+    }
 
     private static string InterpretWeatherCode(int code) => code switch
     {
@@ -218,7 +267,7 @@ public class Program
         1 => "Mainly Clear 🌤️",
         2 => "Partly Cloudy ⛅",
         3 => "Overcast ☁️",
-        45 or 48 => "Fog / Depositing Rime Fog 🌫️",
+        45 or 48 => "Fog 🌫️",
         51 or 53 or 55 => "Drizzle 🌦️",
         61 or 63 or 65 => "Rain 🌧️",
         71 or 73 or 75 => "Snowfall 🌨️",
@@ -227,12 +276,18 @@ public class Program
         85 or 86 => "Snow Showers 🌨️",
         95 => "Thunderstorm ⛈️",
         96 or 99 => "Thunderstorm with Hail ⛈️⚡",
-        _ => $"Code {code} (Unknown)"
+        _ => $"Code {code}"
     };
 }
 
 public class WeatherResult
 {
+    [JsonPropertyName("timezone")]
+    public string Timezone { get; set; } = string.Empty;
+
+    [JsonPropertyName("timezone_abbreviation")]
+    public string TimezoneAbbreviation { get; set; } = string.Empty;
+
     [JsonPropertyName("current")]
     public CurrentWeather Current { get; set; } = new();
 }
@@ -247,9 +302,6 @@ public class CurrentWeather
 
     [JsonPropertyName("relative_humidity_2m")]
     public int RelativeHumidity { get; set; }
-
-    [JsonPropertyName("is_day")]
-    public int IsDay { get; set; }
 
     [JsonPropertyName("weather_code")]
     public int WeatherCode { get; set; }
